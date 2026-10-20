@@ -6,16 +6,49 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 df = pd.read_csv("data/epl_final.csv",index_col=0)
+print(df.columns.tolist())
 
 #Making a match ID to group history of teams
 df['MatchID'] = range(len(df))
 
-
 #Making Matchdat into a datetime
 df['MatchDate'] = pd.to_datetime(df['MatchDate'], errors='coerce')
-df = df.sort_values('MatchDate')
+df = df.sort_values(['MatchDate', 'MatchID']).reset_index(drop =True)
+ratings ={}
+home_elo = []
+away_elo =[]
+initial_rating = 1500
+k_factor = 20
+home_advantage = 60
+for _, row in df.iterrows():
+    home_team = row['HomeTeam']
+    away_team = row['AwayTeam']
+    result = row['FullTimeResult']
+    
+    home_rating =ratings.get(home_team, initial_rating)
+    away_rating = ratings.get(away_team, initial_rating)
+    
+    home_elo.append(home_rating)
+    away_elo.append(away_rating)
+    expected_rating = 1/(1+10**((away_rating-home_rating-home_advantage)/400))
+    actual_results = {'H':1.0, 'A':0.5, 'D':'0'}
+    
+    if result not in actual_results:
+        continue
+    
+    
+    
+df['HomeElo'] = home_elo
+df['AwayElo'] = away_elo
+df['Elo_difference'] = df['HomeElo']+ home_advantage - df['AwayElo'] 
+print(df[['MatchDate','HomeTeam','AwayTeam','Elo_difference']].head(10))
+    
+    
+    
+    
 
 #Creating a "Fixtures" columns 
 df['Fixture'] = df['HomeTeam'] +"(H) "+" vs "+ df['AwayTeam']+ " (A)"
@@ -207,3 +240,76 @@ print(TeamHistory.head(10))
 print("History rows:", len(TeamHistory))
 print("Unique teams:", TeamHistory['Team'].nunique())
 print("Missing points:", TeamHistory['Points'].isna().sum())
+
+# Experiment 2: Logistic Regression
+
+lr = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('classifier', LogisticRegression(
+        max_iter=2000,
+        class_weight='balanced'
+    ))
+])
+
+lr.fit(
+    train[predictors],
+    train['Result_Value'].astype(int)
+)
+
+lr_preds = lr.predict(test[predictors])
+
+print("\n--- Logistic Regression Results ---")
+
+print(
+    "Accuracy:",
+    accuracy_score(test['Result_Value'], lr_preds)
+)
+
+print(
+    "\nMacro precision:",
+    precision_score(
+        test['Result_Value'],
+        lr_preds,
+        average='macro',
+        zero_division=0
+    )
+)
+
+print(
+    "\nClassification report:"
+)
+
+print(classification_report(
+    test['Result_Value'],
+    lr_preds,
+    labels=[0, 1, 2],
+    target_names=['Draw', 'Home win', 'Away win'],
+    zero_division=0
+))
+# Experiment 3: Logistic Regression with scaled features
+
+lr_preprocessor = ColumnTransformer(
+    transformers=[
+        (
+            'teams',
+            OneHotEncoder(handle_unknown='ignore'),
+            categorical_features
+        ),
+        (
+            'numeric',
+            Pipeline(steps=[
+                ('imputer', SimpleImputer(strategy='median')),
+                ('scaler', StandardScaler())
+            ]),
+            numeric_features
+        )
+    ]
+)
+
+lr = Pipeline(steps=[
+    ('preprocessor', lr_preprocessor),
+    ('classifier', LogisticRegression(
+        max_iter=2000,
+        class_weight='balanced'
+    ))
+])
